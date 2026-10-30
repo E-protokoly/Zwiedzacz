@@ -1,0 +1,6 @@
+{
+  "name": "Atlas 195 — Planer Podróży ONZ",
+  "description": "Kompleksowy system planowania podróży do wszystkich 195 państw świata (ONZ + obserwatorzy) z sortowaniem według ryzyka, kosztów i wiz oraz silnikiem tras pakietowych.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
