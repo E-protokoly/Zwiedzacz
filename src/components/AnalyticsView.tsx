@@ -11,6 +11,7 @@ import {
   Continent,
   SavedTripPlan,
   TravelStyle,
+  TripStop,
   UserCountryData,
 } from '../types/travel.ts';
 import {
@@ -21,13 +22,23 @@ import {
 } from '../data/index.ts';
 import { CountryFlag } from './CountryFlag.tsx';
 
+export interface ActiveDraftBackup {
+  tripName: string;
+  targetMonth: number;
+  travelStyle: TravelStyle;
+  estimatedFlightsUsd: number;
+  stops: TripStop[];
+}
+
 interface AnalyticsViewProps {
   userProgress: Record<string, UserCountryData>;
   savedTrips: SavedTripPlan[];
+  activeDraft?: ActiveDraftBackup;
   travelStyle: TravelStyle;
   onImportBackup: (
     progress: Record<string, UserCountryData>,
-    trips: SavedTripPlan[]
+    trips: SavedTripPlan[],
+    activeDraft?: ActiveDraftBackup
   ) => void;
   onSelectCountry: (code: string) => void;
 }
@@ -35,6 +46,7 @@ interface AnalyticsViewProps {
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   userProgress,
   savedTrips,
+  activeDraft,
   travelStyle,
   onImportBackup,
   onSelectCountry,
@@ -102,10 +114,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   const handleExportJson = () => {
     const payload = {
-      version: '1.0',
+      version: '1.1',
       exportedAt: new Date().toISOString(),
       userProgress,
       savedTrips,
+      activeDraft,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json',
@@ -130,7 +143,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         if (parsed && typeof parsed.userProgress === 'object') {
           onImportBackup(
             parsed.userProgress,
-            Array.isArray(parsed.savedTrips) ? parsed.savedTrips : []
+            Array.isArray(parsed.savedTrips) ? parsed.savedTrips : [],
+            parsed.activeDraft && typeof parsed.activeDraft === 'object'
+              ? parsed.activeDraft
+              : undefined
           );
           setImportMessage('Pomyślnie wczytano kopię zapasową postępów i tras.');
         } else {

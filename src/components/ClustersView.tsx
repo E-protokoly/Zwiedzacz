@@ -140,7 +140,9 @@ export const ClustersView: React.FC<ClustersViewProps> = ({
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-slate-700'
                 }`}
               >
-                {cont === 'ALL' ? 'Wszystkie regiony (26)' : cont}
+                {cont === 'ALL'
+                  ? `Wszystkie regiony (${TRAVEL_CLUSTERS.length})`
+                  : cont}
               </button>
             );
           })}
@@ -218,7 +220,7 @@ export const ClustersView: React.FC<ClustersViewProps> = ({
             }}
             className="px-4 py-2 text-xs font-medium text-white bg-[#122144] dark:bg-sky-600 rounded-lg hover:bg-slate-800 dark:hover:bg-sky-500 transition-colors"
           >
-            Pokaż wszystkie 26 klastrów
+            Pokaż wszystkie {TRAVEL_CLUSTERS.length} klastrów
           </button>
         </div>
       ) : (

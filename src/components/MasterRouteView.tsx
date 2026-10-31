@@ -172,9 +172,9 @@ function evaluateCountryMasterScore(
     expeditionCostUsd <= 680 &&
     (country.riskLevel === 1 ||
       country.continent === 'Europa' ||
-      country.clusterId === 'caucasus-anatolia' ||
-      country.clusterId === 'central-asia-stans' ||
-      country.clusterId === 'indochina-peninsula')
+      country.clusterId === 'as-caucasus' ||
+      country.clusterId === 'as-central-stans' ||
+      country.clusterId === 'as-indochina')
   ) {
     return {
       phaseId: 1,

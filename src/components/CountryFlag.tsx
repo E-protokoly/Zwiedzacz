@@ -1,5 +1,10 @@
 import React from 'react';
 
+export function getCountryFlagUrl(code: string, width: 40 | 80 = 40): string {
+  const cleanCode = (code || 'UN').toLowerCase();
+  return `https://flagcdn.com/w${width}/${cleanCode}.png`;
+}
+
 interface CountryFlagProps {
   code: string;
   size?: 'xs' | 'sm' | 'md' | 'lg';
@@ -11,8 +16,6 @@ export const CountryFlag: React.FC<CountryFlagProps> = ({
   size = 'sm',
   className = '',
 }) => {
-  const cleanCode = (code || 'UN').toLowerCase();
-
   const dimensions =
     size === 'xs'
       ? 'w-4 h-3'
@@ -24,8 +27,8 @@ export const CountryFlag: React.FC<CountryFlagProps> = ({
 
   return (
     <img
-      src={`https://flagcdn.com/w40/${cleanCode}.png`}
-      srcSet={`https://flagcdn.com/w80/${cleanCode}.png 2x`}
+      src={getCountryFlagUrl(code, 40)}
+      srcSet={`${getCountryFlagUrl(code, 80)} 2x`}
       alt={code}
       loading="lazy"
       className={`${dimensions} object-cover rounded-[2px] border border-slate-300/60 dark:border-slate-700 shrink-0 inline-block ${className}`}

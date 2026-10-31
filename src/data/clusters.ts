@@ -1,4 +1,4 @@
-import { TravelCluster } from '../types/travel.ts';
+import type { TravelCluster } from '../types/travel.ts';
 
 export const TRAVEL_CLUSTERS: TravelCluster[] = [
   // EUROPA (7 klastrów)

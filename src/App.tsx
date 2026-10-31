@@ -33,6 +33,7 @@ import {
   ALL_COUNTRIES,
   COUNTRIES_BY_CODE,
   CLUSTERS_BY_ID,
+  TRAVEL_CLUSTERS,
   MONTHS_PL,
   RISK_LABELS_PL,
   VISA_LABELS_PL,
@@ -72,6 +73,65 @@ const INITIAL_PROGRESS: Record<string, UserCountryData> = {
     notes: 'Baza startowa wypraw do 195 państw świata.',
   },
 };
+
+const DEFAULT_STOPS: TripStop[] = [
+  { countryCode: 'SI', days: 3, notes: 'Lublana i jezioro Bled' },
+  { countryCode: 'HR', days: 4, notes: 'Zagrzeb, Plitwice i Dubrownik' },
+  { countryCode: 'BA', days: 3, notes: 'Mostar i Sarajewo' },
+  { countryCode: 'ME', days: 3, notes: 'Zatoka Kotorska i Durmitor' },
+  { countryCode: 'AL', days: 4, notes: 'Tirana, Berat i Riwiera Albańska' },
+];
+
+function readInitialDraft(): {
+  tripName: string;
+  targetMonth: number;
+  travelStyle: TravelStyle;
+  estimatedFlightsUsd: number;
+  stops: TripStop[];
+} {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_ACTIVE_DRAFT);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        const style: TravelStyle =
+          parsed.travelStyle === 'budget' ||
+          parsed.travelStyle === 'mid' ||
+          parsed.travelStyle === 'comfort'
+            ? parsed.travelStyle
+            : 'mid';
+        return {
+          tripName:
+            typeof parsed.tripName === 'string' && parsed.tripName.trim()
+              ? parsed.tripName
+              : 'Wielka Pętla Bałkańska',
+          targetMonth:
+            typeof parsed.targetMonth === 'number' &&
+            parsed.targetMonth >= 1 &&
+            parsed.targetMonth <= 12
+              ? parsed.targetMonth
+              : 6,
+          travelStyle: style,
+          estimatedFlightsUsd:
+            typeof parsed.estimatedFlightsUsd === 'number' &&
+            parsed.estimatedFlightsUsd >= 0
+              ? parsed.estimatedFlightsUsd
+              : 170,
+          stops: Array.isArray(parsed.stops) ? parsed.stops : DEFAULT_STOPS,
+        };
+      }
+    }
+  } catch {
+    // Fallback below
+  }
+  return {
+    tripName: 'Wielka Pętla Bałkańska',
+    targetMonth: 6,
+    travelStyle: 'mid',
+    estimatedFlightsUsd: 170,
+    stops: DEFAULT_STOPS,
+  };
+}
 
 export default function App() {
   // Navigation & View Mode
@@ -151,31 +211,21 @@ export default function App() {
     return [];
   });
 
-  // Active Trip Draft State (Zero Data Loss)
-  const [tripName, setTripName] = useState<string>('Wielka Pętla Bałkańska');
-  const [targetMonth, setTargetMonth] = useState<number>(6);
-  const [travelStyle, setTravelStyle] = useState<TravelStyle>('mid');
-  const [estimatedFlightsUsd, setEstimatedFlightsUsd] = useState<number>(170);
-  const [tripStops, setTripStops] = useState<TripStop[]>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY_ACTIVE_DRAFT);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.stops)) {
-          return parsed.stops;
-        }
-      }
-    } catch {
-      // Fallback below
-    }
-    return [
-      { countryCode: 'SI', days: 3, notes: 'Lublana i jezioro Bled' },
-      { countryCode: 'HR', days: 4, notes: 'Zagrzeb, Plitwice i Dubrownik' },
-      { countryCode: 'BA', days: 3, notes: 'Mostar i Sarajewo' },
-      { countryCode: 'ME', days: 3, notes: 'Zatoka Kotorska i Durmitor' },
-      { countryCode: 'AL', days: 4, notes: 'Tirana, Berat i Riwiera Albańska' },
-    ];
-  });
+  // Active Trip Draft State (Zero Data Loss — synchronous initialization)
+  const [initialDraft] = useState(readInitialDraft);
+  const [tripName, setTripName] = useState<string>(() => initialDraft.tripName);
+  const [targetMonth, setTargetMonth] = useState<number>(
+    () => initialDraft.targetMonth
+  );
+  const [travelStyle, setTravelStyle] = useState<TravelStyle>(
+    () => initialDraft.travelStyle
+  );
+  const [estimatedFlightsUsd, setEstimatedFlightsUsd] = useState<number>(
+    () => initialDraft.estimatedFlightsUsd
+  );
+  const [tripStops, setTripStops] = useState<TripStop[]>(
+    () => initialDraft.stops
+  );
   const [isDraftDirty, setIsDraftDirty] = useState<boolean>(false);
 
   // Pending package load guarded by UnsavedChangesModal
@@ -234,24 +284,6 @@ export default function App() {
       console.error('Failed to persist active draft:', e);
     }
   }, [tripName, targetMonth, travelStyle, estimatedFlightsUsd, tripStops]);
-
-  // Load initial draft metadata once
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY_ACTIVE_DRAFT);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed.tripName) setTripName(parsed.tripName);
-        if (parsed.targetMonth) setTargetMonth(Number(parsed.targetMonth));
-        if (parsed.travelStyle) setTravelStyle(parsed.travelStyle);
-        if (typeof parsed.estimatedFlightsUsd === 'number') {
-          setEstimatedFlightsUsd(parsed.estimatedFlightsUsd);
-        }
-      }
-    } catch {
-      // Ignore
-    }
-  }, []);
 
   // Handlers for Country Progress
   const handleUpdateCountryStatus = (code: string, status: VisitStatus) => {
@@ -407,6 +439,16 @@ export default function App() {
     setIsDraftDirty(false);
   };
 
+  const guardUnsavedDraft = (action: () => void) => {
+    if (isDraftDirty && tripStops.length > 0) {
+      setPendingPackageAction(() => action);
+    } else {
+      action();
+    }
+  };
+
+  const handleGuardedPackageLoad = guardUnsavedDraft;
+
   const handleSaveTripFromAssistant = (
     name: string,
     month: number,
@@ -414,13 +456,6 @@ export default function App() {
     flightsUsd: number,
     stops: TripStop[]
   ) => {
-    setTripName(name);
-    setTargetMonth(month);
-    setTravelStyle(style);
-    setEstimatedFlightsUsd(flightsUsd);
-    setTripStops(stops);
-    setIsDraftDirty(false);
-
     const newTrip: SavedTripPlan = {
       id: `trip-ai-${Date.now()}`,
       name,
@@ -431,6 +466,15 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
     setSavedTrips((prev) => [newTrip, ...prev]);
+
+    guardUnsavedDraft(() => {
+      setTripName(name);
+      setTargetMonth(month);
+      setTravelStyle(style);
+      setEstimatedFlightsUsd(flightsUsd);
+      setTripStops(stops);
+      setIsDraftDirty(false);
+    });
   };
 
   const executePackageLoad = (
@@ -459,14 +503,6 @@ export default function App() {
     setIsDraftDirty(false);
     setInspectedCountryCode(null);
     setActiveTab(openInTab);
-  };
-
-  const handleGuardedPackageLoad = (action: () => void) => {
-    if (isDraftDirty && tripStops.length > 0) {
-      setPendingPackageAction(() => action);
-    } else {
-      action();
-    }
   };
 
   const handleBuildNeighborPackage = (
@@ -688,7 +724,7 @@ export default function App() {
                 : 'hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
-            Klastry Pakietowe (26)
+            Klastry Pakietowe ({TRAVEL_CLUSTERS.length})
           </button>
           <button
             type="button"
@@ -739,7 +775,8 @@ export default function App() {
                 {activeTab === 'masterplan' &&
                   'Optymalna Trasa Przez Cały Świat (5 Faz)'}
                 {activeTab === 'map' && 'Interaktywna Mapa Świata'}
-                {activeTab === 'clusters' && '26 Regionalnych Klastrów Pakietowych'}
+                {activeTab === 'clusters' &&
+                  `${TRAVEL_CLUSTERS.length} Regionalnych Klastrów Pakietowych`}
                 {activeTab === 'builder' && 'Kreator Wypraw Pakietowych'}
                 {activeTab === 'analytics' && 'Postęp Klubu 195 i Kopia Zapasowa'}
               </span>
@@ -1519,9 +1556,11 @@ export default function App() {
               }}
               onSaveTrip={handleSaveCurrentTrip}
               onClearTrip={() => {
-                setTripStops([]);
-                setTripName('Wycieczka z mapy');
-                setIsDraftDirty(false);
+                guardUnsavedDraft(() => {
+                  setTripStops([]);
+                  setTripName('Wycieczka z mapy');
+                  setIsDraftDirty(false);
+                });
               }}
               onOpenInBuilder={() => setActiveTab('builder')}
             />
@@ -1531,7 +1570,7 @@ export default function App() {
         {activeTab === 'clusters' && (
           <ErrorBoundary
             isolateSection={true}
-            sectionName="Klastry Pakietowe (26 Regionów)"
+            sectionName={`Klastry Pakietowe (${TRAVEL_CLUSTERS.length} Regionów)`}
           >
             <ClustersView
               userProgress={userProgress}
@@ -1590,9 +1629,11 @@ export default function App() {
                 setSavedTrips((prev) => prev.filter((t) => t.id !== id))
               }
               onClearDraft={() => {
-                setTripStops([]);
-                setTripName('Nowa wyprawa pakietowa');
-                setIsDraftDirty(false);
+                guardUnsavedDraft(() => {
+                  setTripStops([]);
+                  setTripName('Nowa wyprawa pakietowa');
+                  setIsDraftDirty(false);
+                });
               }}
               onSelectCountry={(code) => setInspectedCountryCode(code)}
               onMarkTripCountriesStatus={handleMarkBatchStatus}
@@ -1608,10 +1649,35 @@ export default function App() {
             <AnalyticsView
               userProgress={userProgress}
               savedTrips={savedTrips}
+              activeDraft={{
+                tripName,
+                targetMonth,
+                travelStyle,
+                estimatedFlightsUsd,
+                stops: tripStops,
+              }}
               travelStyle={travelStyle}
-              onImportBackup={(newProgress, newTrips) => {
+              onImportBackup={(newProgress, newTrips, importedDraft) => {
                 setUserProgress(newProgress);
                 setSavedTrips(newTrips);
+                if (importedDraft) {
+                  if (importedDraft.tripName) {
+                    setTripName(importedDraft.tripName);
+                  }
+                  if (importedDraft.targetMonth) {
+                    setTargetMonth(importedDraft.targetMonth);
+                  }
+                  if (importedDraft.travelStyle) {
+                    setTravelStyle(importedDraft.travelStyle);
+                  }
+                  if (typeof importedDraft.estimatedFlightsUsd === 'number') {
+                    setEstimatedFlightsUsd(importedDraft.estimatedFlightsUsd);
+                  }
+                  if (Array.isArray(importedDraft.stops)) {
+                    setTripStops(importedDraft.stops);
+                  }
+                  setIsDraftDirty(false);
+                }
               }}
               onSelectCountry={(code) => setInspectedCountryCode(code)}
             />

@@ -1,4 +1,4 @@
-import { CountryRecord } from '../types/travel.ts';
+import type { CountryRecord } from '../types/travel.ts';
 
 export const COUNTRIES_AFRICA: CountryRecord[] = [
   // ============================================================================

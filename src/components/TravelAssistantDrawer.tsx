@@ -17,7 +17,150 @@ import {
   UserCountryData,
   VisitStatus,
 } from '../types/travel.ts';
-import { COUNTRIES_BY_CODE } from '../data/index.ts';
+import {
+  ALL_COUNTRIES,
+  COUNTRIES_BY_CODE,
+  CLUSTERS_BY_ID,
+  TRAVEL_CLUSTERS,
+  RISK_LABELS_PL,
+  VISA_LABELS_PL,
+  formatMonthsRange,
+} from '../data/index.ts';
+
+interface AssistantApiResponse {
+  reply: string;
+  toolCalls?: Array<{
+    name: string;
+    args: Record<string, unknown>;
+  }>;
+  sources?: { title: string; uri: string }[];
+}
+
+function buildClientAssistantFallback(
+  userMessage: string
+): AssistantApiResponse {
+  const qLower = userMessage.toLowerCase();
+
+  const matchedClusterDirect = TRAVEL_CLUSTERS.find(
+    (cl) =>
+      qLower.includes(cl.namePl.toLowerCase()) ||
+      (qLower.includes('azji centralnej') && cl.id === 'as-central-stans') ||
+      (qLower.includes('afryki południowej') && cl.id === 'af-south-indian') ||
+      (qLower.includes('pacyfik') && cl.id === 'oc-south-pacific') ||
+      (qLower.includes('gujan') && cl.id === 'sa-guianas-north') ||
+      (qLower.includes('kaukaz') && cl.id === 'as-caucasus') ||
+      (qLower.includes('bałkan') && cl.id === 'eu-balkans') ||
+      (qLower.includes('bałty') && cl.id === 'eu-central-baltic')
+  );
+
+  const matchedCountries = ALL_COUNTRIES.filter(
+    (c) =>
+      qLower.includes(c.namePl.toLowerCase().slice(0, 5)) ||
+      qLower.includes(c.nameEn.toLowerCase()) ||
+      qLower.includes(c.subregion.toLowerCase()) ||
+      qLower.includes(c.continent.toLowerCase())
+  );
+
+  const seedCountry =
+    matchedCountries[0] ||
+    (matchedClusterDirect
+      ? ALL_COUNTRIES.find((c) => c.clusterId === matchedClusterDirect.id)
+      : undefined) ||
+    ALL_COUNTRIES.find((c) => qLower.includes('azj')) ||
+    ALL_COUNTRIES.find((c) => qLower.includes('afryk')) ||
+    COUNTRIES_BY_CODE['GY'];
+
+  const cluster =
+    matchedClusterDirect ||
+    (seedCountry ? CLUSTERS_BY_ID[seedCountry.clusterId] : undefined);
+
+  const clusterCountries = ALL_COUNTRIES.filter(
+    (c) => c.clusterId === (cluster?.id || seedCountry?.clusterId || 'sa-guianas-north')
+  ).slice(0, 5);
+
+  const hasTripPlanningIntent =
+    /(zaplanuj|ułóż|uloz|zapisz|stworz|stwórz|zbuduj|przygotuj|wypraw|tras|wycieczk|pakiet|plan\b)/i.test(
+      qLower
+    );
+
+  if (!hasTripPlanningIntent && seedCountry) {
+    const neighborNames = seedCountry.neighbors
+      .map((code) => COUNTRIES_BY_CODE[code]?.namePl)
+      .filter(Boolean)
+      .join(', ');
+
+    const clusterListText =
+      clusterCountries.length > 1
+        ? clusterCountries
+            .map(
+              (c) =>
+                `**${c.namePl}** (${VISA_LABELS_PL[c.visaForPl].short}, ~$${c.dailyCostUsd.mid}/dzień)`
+            )
+            .join(', ')
+        : neighborNames || 'Wyspa / połączenia lotnicze';
+
+    return {
+      reply: `Oto najważniejsze informacje podróżnicze dla regionu **${
+        cluster?.namePl || seedCountry.namePl
+      }** (punkt bazowy: **${seedCountry.namePl}**, stolica: ${
+        seedCountry.capitalPl
+      }):\n\n- **Państwa w pakiecie regionalnym:** ${clusterListText}\n- **Sezon pogodowy:** ${formatMonthsRange(
+        seedCountry.bestMonths
+      )}\n- **Wiza dla Polaków (${seedCountry.namePl}):** ${
+        VISA_LABELS_PL[seedCountry.visaForPl].label
+      } (${seedCountry.visaNotePl})\n- **Budżet dzienny:** Backpacker $${
+        seedCountry.dailyCostUsd.budget
+      } · Komfort $${seedCountry.dailyCostUsd.mid} · Premium $${
+        seedCountry.dailyCostUsd.comfort
+      }\n- **Bezpieczeństwo:** ${
+        RISK_LABELS_PL[seedCountry.riskLevel].label
+      }\n- **Sąsiedzi do połączenia w jedną podróż:** ${
+        neighborNames || 'Połączenia regionalne z głównego hubu'
+      }\n\nJeśli chcesz, napisz *„Zaplanuj i zapisz pakiet dla ${
+        cluster?.namePl || seedCountry.namePl
+      }”*, a automatycznie ułożę i zapiszę tę trasę w Kreatorze Wypraw oraz na Mapie Świata!`,
+      toolCalls: [],
+      sources: [],
+    };
+  }
+
+  const fallbackStops = clusterCountries.map((c) => ({
+    countryCode: c.code,
+    days: c.recommendedDays,
+    notes: `${c.capitalPl} — ${c.highlightsPl}`,
+  }));
+
+  const pkgName = cluster
+    ? `Pakiet: ${cluster.namePl}`
+    : `Wyprawa: ${seedCountry?.namePl || 'Pakiet Regionalny'}`;
+
+  return {
+    reply: `Przygotowałam i automatycznie zapisałam dla Ciebie optymalny pakiet regionalny **${pkgName}** obejmujący **${
+      fallbackStops.length
+    } sąsiednich państw**: ${clusterCountries
+      .map((c) => `${c.namePl} (${c.recommendedDays} dni)`)
+      .join(' → ')}.\n\n- **Brama lotnicza:** ${
+      cluster?.gatewayHub || clusterCountries[0]?.capitalPl
+    }\n- **Logistyka na miejscu:** ${
+      cluster?.transportModePl || 'Przejazdy lądowe i połączenia regionalne'
+    }\n- **Najlepsze miesiące:** ${
+      cluster ? formatMonthsRange(cluster.bestMonths) : 'Cały rok'
+    }\n\nWycieczka jest już zapisana w Twoim **Kreatorze Wypraw** oraz zaznaczona na **Mapie Świata**!`,
+    toolCalls: [
+      {
+        name: 'saveTripPlan',
+        args: {
+          name: pkgName,
+          targetMonth: cluster?.bestMonths[0] ?? 5,
+          travelStyle: 'mid',
+          estimatedFlightsUsd: cluster?.estimatedFlightFromPlUsd ?? 550,
+          stops: fallbackStops,
+        },
+      },
+    ],
+    sources: [],
+  };
+}
 
 interface ExecutedActionSummary {
   type: 'saveTripPlan' | 'markCountriesStatus' | 'saveCountryNote';
@@ -139,25 +282,37 @@ export const TravelAssistantDrawer: React.FC<TravelAssistantDrawerProps> = ({
         (t) => `${t.name} (${t.stops.map((s) => s.countryCode).join(',')})`
       );
 
-      const response = await fetch('/api/assistant/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: updatedHistory.slice(-12).map((m) => ({
-            role: m.role,
-            text: m.text,
-          })),
-          userContext: {
-            visitedCodes,
-            activeTripSummary,
-            savedTripsNames,
-          },
-        }),
-      });
+      let data: AssistantApiResponse | null = null;
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Błąd komunikacji z asystentką.');
+      try {
+        const response = await fetch('/api/assistant/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: updatedHistory.slice(-12).map((m) => ({
+              role: m.role,
+              text: m.text,
+            })),
+            userContext: {
+              visitedCodes,
+              activeTripSummary,
+              savedTripsNames,
+            },
+          }),
+        });
+
+        if (response.ok) {
+          const parsed = await response.json();
+          if (parsed && typeof parsed.reply === 'string') {
+            data = parsed;
+          }
+        }
+      } catch {
+        // Static hosting (GitHub Pages) — fall back to client-side deterministic travel assistant
+      }
+
+      if (!data) {
+        data = buildClientAssistantFallback(textToSend);
       }
 
       const executedActions: ExecutedActionSummary[] = [];

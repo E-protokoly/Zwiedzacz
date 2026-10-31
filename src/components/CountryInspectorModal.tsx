@@ -31,6 +31,7 @@ import {
   RISK_LABELS_PL,
   VISA_LABELS_PL,
   USD_TO_PLN,
+  formatMonthsRange,
 } from '../data/index.ts';
 import { CountryFlag } from './CountryFlag.tsx';
 
@@ -51,6 +52,418 @@ interface CountryPlacePhoto {
 
 const NEWS_CACHE_KEY = 'atlas195_country_news_cache_v3';
 const PHOTOS_CACHE_KEY = 'atlas195_country_photos_cache_v3';
+
+function isValidClientLandmarkPhotoUrl(
+  url: string | null | undefined,
+  pageTitle = ''
+): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const lower = url.toLowerCase();
+  const lowerTitle = pageTitle.toLowerCase();
+  if (/\.svg(\.png|\.jpg|\.jpeg)?(\?|$)/i.test(lower)) return false;
+  if (
+    lower.includes('flag_of_') ||
+    lower.includes('flaga_') ||
+    lower.includes('coat_of_arms') ||
+    lower.includes('herb_') ||
+    lower.includes('locator_map') ||
+    lower.includes('location_map') ||
+    lower.includes('orthographic') ||
+    lower.includes('emblem_of') ||
+    lower.includes('seal_of') ||
+    lower.includes('welterbe') ||
+    lower.includes('unesco_logo') ||
+    lower.includes('commons-logo') ||
+    lower.includes('question_book') ||
+    lower.includes('map_of_') ||
+    lower.includes('mapa_') ||
+    lower.includes('icon') ||
+    lower.includes('symbol')
+  ) {
+    return false;
+  }
+  if (
+    lowerTitle.startsWith('list of') ||
+    lowerTitle.startsWith('lists of') ||
+    lowerTitle.startsWith('outline of') ||
+    lowerTitle.startsWith('index of') ||
+    lowerTitle.startsWith('flag of') ||
+    lowerTitle.startsWith('economy of') ||
+    lowerTitle.startsWith('demographics of') ||
+    lowerTitle.startsWith('politics of')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+async function fetchClientWikiSummary(
+  lang: 'pl' | 'en',
+  title: string
+): Promise<{
+  title: string;
+  description: string;
+  imageUrl: string | null;
+  pageUrl: string | null;
+} | null> {
+  if (!title || !title.trim()) return null;
+  try {
+    const url = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
+      title.trim()
+    )}`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.type === 'disambiguation') return null;
+
+    const thumbUrl = data?.thumbnail?.source;
+    const origUrl = data?.originalimage?.source;
+    const imageUrl = isValidClientLandmarkPhotoUrl(thumbUrl, data?.title)
+      ? String(thumbUrl)
+      : isValidClientLandmarkPhotoUrl(origUrl, data?.title)
+      ? String(origUrl)
+      : null;
+
+    if (!imageUrl) return null;
+
+    return {
+      title: String(data?.title || title),
+      description: String(data?.extract || ''),
+      imageUrl,
+      pageUrl: data?.content_urls?.desktop?.page || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function searchClientWikiGenerator(
+  lang: 'pl' | 'en',
+  query: string
+): Promise<
+  Array<{
+    title: string;
+    description: string;
+    imageUrl: string;
+    pageUrl: string | null;
+  }>
+> {
+  try {
+    const searchUrl = `https://${lang}.wikipedia.org/w/api.php?origin=*&action=query&generator=search&gsrsearch=${encodeURIComponent(
+      query
+    )}&gsrlimit=6&prop=pageimages|extracts|info&exintro=1&explaintext=1&exchars=190&inprop=url&pithumbsize=500&format=json`;
+    const res = await fetch(searchUrl, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const pages: Array<{
+      title: string;
+      extract?: string;
+      thumbnail?: { source?: string };
+      fullurl?: string;
+    }> = data?.query?.pages ? Object.values(data.query.pages) : [];
+
+    const out: Array<{
+      title: string;
+      description: string;
+      imageUrl: string;
+      pageUrl: string | null;
+    }> = [];
+
+    for (const p of pages) {
+      const img = p?.thumbnail?.source;
+      if (img && isValidClientLandmarkPhotoUrl(img, p.title)) {
+        out.push({
+          title: p.title,
+          description: p.extract || '',
+          imageUrl: img,
+          pageUrl: p.fullurl || null,
+        });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchClientWikiMediaList(
+  lang: 'pl' | 'en',
+  title: string,
+  countryNamePl: string
+): Promise<CountryPlacePhoto[]> {
+  try {
+    const url = `https://${lang}.wikipedia.org/api/rest_v1/page/media-list/${encodeURIComponent(
+      title.trim()
+    )}`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const photos: CountryPlacePhoto[] = [];
+
+    for (const item of items) {
+      if (photos.length >= 4) break;
+      if (item?.type !== 'image') continue;
+      const itemTitle = String(item?.title || '').replace(/^File:|^Plik:/i, '');
+      const srcRaw =
+        item?.srcset?.[1]?.src ||
+        item?.srcset?.[0]?.src ||
+        item?.original?.source ||
+        '';
+      const fullSrc = srcRaw.startsWith('//') ? `https:${srcRaw}` : srcRaw;
+      if (!isValidClientLandmarkPhotoUrl(fullSrc, itemTitle)) continue;
+
+      const caption = String(item?.caption?.text || '').trim();
+      const cleanName = itemTitle.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
+      photos.push({
+        namePl: cleanName.slice(0, 60) || countryNamePl,
+        categoryPl: `Fotografia z kraju · ${countryNamePl}`,
+        descriptionPl:
+          caption ||
+          `Krajobraz i architektura w państwie ${countryNamePl}.`,
+        imageUrl: fullSrc,
+        pageUrl: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(
+          title.trim()
+        )}`,
+      });
+    }
+    return photos;
+  } catch {
+    return [];
+  }
+}
+
+function buildClientFallbackPhotos(
+  targetCountry: CountryRecord
+): CountryPlacePhoto[] {
+  const beforeDash =
+    (targetCountry.highlightsPl || '').split(/\s+[—–]\s+/)[0] || '';
+  const tokens = beforeDash
+    .split(/[,·;]/)
+    .map((s) => s.replace(/\(.*?\)/g, '').trim())
+    .filter(
+      (s) =>
+        s.length >= 2 &&
+        s.toLowerCase() !== targetCountry.capitalPl.toLowerCase()
+    );
+
+  const labels = [
+    `${targetCountry.capitalPl} — Stolica`,
+    ...tokens.slice(0, 3),
+  ];
+  while (labels.length < 4) {
+    labels.push(
+      `Region turystyczny #${labels.length + 1} (${targetCountry.namePl})`
+    );
+  }
+
+  return labels.slice(0, 4).map((label, idx) => ({
+    namePl: label,
+    categoryPl:
+      idx === 0
+        ? `Stolica · ${targetCountry.namePl}`
+        : `Atrakcja i region · ${targetCountry.namePl}`,
+    descriptionPl: targetCountry.highlightsPl,
+    imageUrl: null,
+    pageUrl: `https://pl.wikipedia.org/wiki/${encodeURIComponent(
+      targetCountry.namePl
+    )}`,
+  }));
+}
+
+async function resolveClientPlaceCandidate(
+  labelPl: string,
+  categoryPl: string,
+  namePl: string,
+  nameEn: string
+): Promise<CountryPlacePhoto | null> {
+  const summary =
+    (await fetchClientWikiSummary('pl', labelPl)) ||
+    (await fetchClientWikiSummary('en', labelPl));
+
+  if (summary && summary.imageUrl) {
+    return {
+      namePl: labelPl,
+      categoryPl,
+      descriptionPl:
+        summary.description.slice(0, 180) +
+        (summary.description.length > 180 ? '...' : ''),
+      imageUrl: summary.imageUrl,
+      pageUrl: summary.pageUrl,
+    };
+  }
+
+  const hitsPl = await searchClientWikiGenerator('pl', `${labelPl} ${namePl}`);
+  if (hitsPl.length > 0) {
+    return {
+      namePl: labelPl,
+      categoryPl,
+      descriptionPl:
+        hitsPl[0].description ||
+        `Jedna z głównych atrakcji w kraju ${namePl}.`,
+      imageUrl: hitsPl[0].imageUrl,
+      pageUrl: hitsPl[0].pageUrl,
+    };
+  }
+
+  const hitsEn = await searchClientWikiGenerator('en', `${labelPl} ${nameEn}`);
+  if (hitsEn.length > 0) {
+    return {
+      namePl: labelPl,
+      categoryPl,
+      descriptionPl:
+        hitsEn[0].description ||
+        `Jedno z najbardziej znanych miejsc w kraju ${namePl}.`,
+      imageUrl: hitsEn[0].imageUrl,
+      pageUrl: hitsEn[0].pageUrl,
+    };
+  }
+
+  return null;
+}
+
+async function fetchClientWikipediaPhotosForCountry(
+  targetCountry: CountryRecord
+): Promise<CountryPlacePhoto[]> {
+  const { namePl, nameEn, capitalPl, highlightsPl } = targetCountry;
+  const beforeDash = (highlightsPl || '').split(/\s+[—–]\s+/)[0] || '';
+  const rawTokens = beforeDash
+    .split(/[,·;]/)
+    .map((s) => s.replace(/\(.*?\)/g, '').trim())
+    .filter(
+      (s) =>
+        s.length >= 2 &&
+        s.length <= 50 &&
+        s.toLowerCase() !== capitalPl.toLowerCase()
+    );
+
+  const candidateTasks: Array<Promise<CountryPlacePhoto | null>> = [
+    resolveClientPlaceCandidate(
+      capitalPl,
+      `Stolica · ${namePl}`,
+      namePl,
+      nameEn
+    ).then((res) =>
+      res ? { ...res, namePl: `${capitalPl} — Stolica` } : null
+    ),
+    ...rawTokens.slice(0, 4).map((token) =>
+      resolveClientPlaceCandidate(
+        token,
+        `Atrakcja i region · ${namePl}`,
+        namePl,
+        nameEn
+      )
+    ),
+  ];
+
+  const [resolvedCandidates, fallbackPl, fallbackEn, mediaListEn] =
+    await Promise.all([
+      Promise.all(candidateTasks),
+      searchClientWikiGenerator('pl', `${namePl} zabytek park narodowy miasto`),
+      searchClientWikiGenerator('en', `${nameEn} UNESCO World Heritage landmark`),
+      fetchClientWikiMediaList('en', nameEn, namePl),
+    ]);
+
+  const results: CountryPlacePhoto[] = [];
+  const usedUrls = new Set<string>();
+
+  for (const item of resolvedCandidates) {
+    if (results.length >= 4) break;
+    if (item && item.imageUrl && !usedUrls.has(item.imageUrl)) {
+      usedUrls.add(item.imageUrl);
+      results.push(item);
+    }
+  }
+
+  for (const hit of [...fallbackPl, ...fallbackEn]) {
+    if (results.length >= 4) break;
+    if (hit.imageUrl && !usedUrls.has(hit.imageUrl)) {
+      usedUrls.add(hit.imageUrl);
+      results.push({
+        namePl: hit.title,
+        categoryPl: `Miejsce i dziedzictwo · ${namePl}`,
+        descriptionPl:
+          hit.description ||
+          `Ważny punkt na mapie podróżniczej kraju ${namePl}.`,
+        imageUrl: hit.imageUrl,
+        pageUrl: hit.pageUrl,
+      });
+    }
+  }
+
+  for (const mediaItem of mediaListEn) {
+    if (results.length >= 4) break;
+    if (mediaItem.imageUrl && !usedUrls.has(mediaItem.imageUrl)) {
+      usedUrls.add(mediaItem.imageUrl);
+      results.push(mediaItem);
+    }
+  }
+
+  if (results.length < 4) {
+    const fallbackCards = buildClientFallbackPhotos(targetCountry);
+    for (const card of fallbackCards) {
+      if (results.length >= 4) break;
+      results.push(card);
+    }
+  }
+
+  return results.slice(0, 4);
+}
+
+function buildClientFallbackNews(
+  targetCountry: CountryRecord
+): CountryNewsItem {
+  const cluster = CLUSTERS_BY_ID[targetCountry.clusterId];
+  const riskInfo = `${RISK_LABELS_PL[targetCountry.riskLevel].label} — ${
+    RISK_LABELS_PL[targetCountry.riskLevel].description
+  }`;
+  const visaInfo = `${VISA_LABELS_PL[targetCountry.visaForPl].label} (${
+    targetCountry.visaNotePl
+  })`;
+  const seasonInfo = formatMonthsRange(targetCountry.bestMonths);
+
+  const summaryMarkdown = `### 1. Raport i sytuacja podróżnicza — ${targetCountry.namePl} (${targetCountry.capitalPl})
+- **Główne atrakcje i kierunek:** ${targetCountry.highlightsPl}
+- **Rekomendowany czas pobytu i budżet:** ok. **${targetCountry.recommendedDays} dni**; dzienny koszt na miejscu wynosi średnio **$${targetCountry.dailyCostUsd.budget}** (Backpacker), **$${targetCountry.dailyCostUsd.mid}** (Komfort) lub **$${targetCountry.dailyCostUsd.comfort}** (Premium).
+
+### 2. Bezpieczeństwo i logistyka regionalna
+- **Poziom bezpieczeństwa:** ${riskInfo}
+- **Pakiet regionalny:** ${
+    cluster
+      ? `Kraj należy do klastra **${cluster.namePl}** (główny hub dolotowy: ${cluster.gatewayHub}; rekomendowany transport w pakiecie: ${cluster.transportModePl}).`
+      : `Głównym punktem wjazdowym pozostaje stolica kraju — **${targetCountry.capitalPl}**.`
+  }
+
+### 3. Praktyczny puls dla turysty z Polski
+- **Wymogi wjazdowe (paszport PL):** ${visaInfo}
+- **Optymalne okno pogodowe:** ${seasonInfo}`;
+
+  return {
+    countryCode: targetCountry.code,
+    summaryMarkdown,
+    sources: [
+      {
+        title: `Google News PL: ${targetCountry.namePl} — najnowsze wiadomości`,
+        uri: `https://news.google.com/search?q=${encodeURIComponent(
+          `${targetCountry.namePl} podróż turystyka bezpieczeństwo`
+        )}&hl=pl&gl=PL&ceid=PL:pl`,
+      },
+      {
+        title: 'Komunikaty MSZ RP dla podróżujących (gov.pl)',
+        uri: 'https://www.gov.pl/web/dyplomacja/informacje-dla-podrozujacych',
+      },
+      {
+        title: `Przewodnik Wikivoyage — ${targetCountry.nameEn}`,
+        uri: `https://en.wikivoyage.org/wiki/${encodeURIComponent(
+          targetCountry.nameEn
+        )}`,
+      },
+    ],
+    fetchedAt: new Date().toISOString(),
+  };
+}
 
 interface CountryInspectorModalProps {
   country: CountryRecord | null;
@@ -110,36 +523,52 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
 
       setIsLoadingPhotos(true);
       try {
-        const response = await fetch('/api/country-photos', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            countryCode: targetCountry.code,
-            namePl: targetCountry.namePl,
-            nameEn: targetCountry.nameEn,
-            capitalPl: targetCountry.capitalPl,
-            highlightsPl: targetCountry.highlightsPl,
-            forceRefresh,
-          }),
-        });
+        let resolvedPlaces: CountryPlacePhoto[] | null = null;
 
-        const data = await response.json();
-        if (response.ok && Array.isArray(data?.places)) {
-          setPlacesPhotos(data.places);
-          try {
-            const rawCache = sessionStorage.getItem(PHOTOS_CACHE_KEY);
-            const parsedCache = rawCache ? JSON.parse(rawCache) : {};
-            parsedCache[targetCountry.code] = data.places;
-            sessionStorage.setItem(
-              PHOTOS_CACHE_KEY,
-              JSON.stringify(parsedCache)
-            );
-          } catch {
-            // Ignore quota
+        try {
+          const response = await fetch('/api/country-photos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              countryCode: targetCountry.code,
+              namePl: targetCountry.namePl,
+              nameEn: targetCountry.nameEn,
+              capitalPl: targetCountry.capitalPl,
+              highlightsPl: targetCountry.highlightsPl,
+              forceRefresh,
+            }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data?.places) && data.places.length > 0) {
+              resolvedPlaces = data.places;
+            }
           }
+        } catch {
+          // Static hosting (GitHub Pages) or offline — fall back to direct browser Wikipedia API
+        }
+
+        if (!resolvedPlaces || resolvedPlaces.length === 0) {
+          resolvedPlaces = await fetchClientWikipediaPhotosForCountry(
+            targetCountry
+          );
+        }
+
+        setPlacesPhotos(resolvedPlaces);
+        try {
+          const rawCache = sessionStorage.getItem(PHOTOS_CACHE_KEY);
+          const parsedCache = rawCache ? JSON.parse(rawCache) : {};
+          parsedCache[targetCountry.code] = resolvedPlaces;
+          sessionStorage.setItem(
+            PHOTOS_CACHE_KEY,
+            JSON.stringify(parsedCache)
+          );
+        } catch {
+          // Ignore quota
         }
       } catch {
-        // Fallback handled by empty/default state
+        setPlacesPhotos(buildClientFallbackPhotos(targetCountry));
       } finally {
         setIsLoadingPhotos(false);
       }
@@ -169,29 +598,39 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
 
       setIsLoadingNews(true);
       try {
-        const response = await fetch('/api/country-news', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            countryCode: targetCountry.code,
-            namePl: targetCountry.namePl,
-            nameEn: targetCountry.nameEn,
-            capitalPl: targetCountry.capitalPl,
-            forceRefresh,
-          }),
-        });
+        let item: CountryNewsItem | null = null;
 
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data?.error || 'Nie udało się pobrać wiadomości.');
+        try {
+          const response = await fetch('/api/country-news', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              countryCode: targetCountry.code,
+              namePl: targetCountry.namePl,
+              nameEn: targetCountry.nameEn,
+              capitalPl: targetCountry.capitalPl,
+              forceRefresh,
+            }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data && typeof data.summaryMarkdown === 'string' && data.summaryMarkdown.trim()) {
+              item = {
+                countryCode: targetCountry.code,
+                summaryMarkdown: data.summaryMarkdown,
+                sources: Array.isArray(data.sources) ? data.sources : [],
+                fetchedAt: data.fetchedAt ?? new Date().toISOString(),
+              };
+            }
+          }
+        } catch {
+          // Static hosting (GitHub Pages) — fall back to structured travel & safety briefing
         }
 
-        const item: CountryNewsItem = {
-          countryCode: targetCountry.code,
-          summaryMarkdown: data.summaryMarkdown ?? '',
-          sources: Array.isArray(data.sources) ? data.sources : [],
-          fetchedAt: data.fetchedAt ?? new Date().toISOString(),
-        };
+        if (!item) {
+          item = buildClientFallbackNews(targetCountry);
+        }
 
         setNewsData(item);
 
@@ -203,12 +642,8 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
         } catch {
           // Ignore storage quota
         }
-      } catch (err: unknown) {
-        setNewsError(
-          err instanceof Error
-            ? err.message
-            : 'Błąd połączenia z serwisem wiadomości.'
-        );
+      } catch {
+        setNewsData(buildClientFallbackNews(targetCountry));
       } finally {
         setIsLoadingNews(false);
       }
@@ -255,6 +690,23 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
     { value: 'VISITED', label: 'Odwiedzony' },
   ];
 
+  const renderInlineBold = (text: string) => {
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, idx) => {
+      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+        return (
+          <strong
+            key={idx}
+            className="font-semibold text-slate-900 dark:text-slate-100"
+          >
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return <React.Fragment key={idx}>{part}</React.Fragment>;
+    });
+  };
+
   const renderFormattedNews = (markdown: string) => {
     const lines = markdown.split('\n').filter((l) => l.trim().length > 0);
     return (
@@ -267,7 +719,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                 key={i}
                 className="text-xs font-bold text-slate-900 dark:text-slate-100 pt-2 first:pt-0"
               >
-                {trimmed.replace(/^#{2,3}\s*/, '')}
+                {renderInlineBold(trimmed.replace(/^#{2,3}\s*/, ''))}
               </h4>
             );
           }
@@ -275,11 +727,11 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
             return (
               <div key={i} className="flex items-start gap-2 pl-1">
                 <span className="text-slate-400 select-none">•</span>
-                <span>{trimmed.slice(2).replace(/\*\*(.*?)\*\*/g, '$1')}</span>
+                <span>{renderInlineBold(trimmed.slice(2))}</span>
               </div>
             );
           }
-          return <p key={i}>{trimmed.replace(/\*\*(.*?)\*\*/g, '$1')}</p>;
+          return <p key={i}>{renderInlineBold(trimmed)}</p>;
         })}
       </div>
     );
@@ -350,7 +802,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                         onClick={() => onUpdateStatus(country.code, opt.value)}
                         className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                           active
-                            ? 'bg-[#122144] dark:bg-blue-600 text-white shadow-xs'
+                            ? 'bg-[#122144] dark:bg-sky-600 text-white shadow-xs'
                             : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
                         }`}
                       >
@@ -368,7 +820,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                   className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                     isInActiveTrip
                       ? 'bg-emerald-700 text-white hover:bg-emerald-800'
-                      : 'bg-[#122144] dark:bg-blue-600 text-white hover:bg-slate-800 dark:hover:bg-blue-500'
+                      : 'bg-[#122144] dark:bg-sky-600 text-white hover:bg-slate-800 dark:hover:bg-sky-500'
                   }`}
                 >
                   {isInActiveTrip ? (
@@ -467,7 +919,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                    <Camera className="w-4 h-4 text-[#122144] dark:text-blue-400" />
+                    <Camera className="w-4 h-4 text-[#122144] dark:text-sky-400" />
                     Najciekawsze miejsca i zabytki — {country.namePl}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -596,7 +1048,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                       href={lightboxPlace.pageUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium text-[#122144] dark:text-blue-400 hover:underline"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-[#122144] dark:text-sky-400 hover:underline"
                     >
                       <ExternalLink className="w-3.5 h-3.5" />
                       Zobacz pełny artykuł i galerię w Wikipedii
@@ -610,7 +1062,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
             <div className="space-y-3 pb-6 border-b border-slate-200/70 dark:border-slate-800">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                  <Newspaper className="w-4 h-4 text-[#122144] dark:text-blue-400" />
+                  <Newspaper className="w-4 h-4 text-[#122144] dark:text-sky-400" />
                   Najnowsze wiadomości ze świata — {country.namePl}
                 </h3>
                 <button
@@ -655,7 +1107,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                   {newsData.sources.length > 0 && (
                     <div className="pt-3 border-t border-slate-200/70 dark:border-slate-700 space-y-1.5">
                       <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                        Źródła wiadomości (Google Search Grounding):
+                        Źródła wiadomości (Google News RSS):
                       </div>
                       <div className="flex flex-wrap gap-x-3 gap-y-1">
                         {newsData.sources.map((src, idx) => (
@@ -664,7 +1116,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                             href={src.uri}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[11px] text-[#122144] dark:text-blue-400 hover:underline max-w-[260px] truncate"
+                            className="inline-flex items-center gap-1 text-[11px] text-[#122144] dark:text-sky-400 hover:underline max-w-[260px] truncate"
                           >
                             <ExternalLink className="w-3 h-3 shrink-0" />
                             <span className="truncate">{src.title}</span>
@@ -720,7 +1172,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                       key={m.id}
                       className={`py-2 px-1 text-center rounded border text-xs font-medium ${
                         isBest
-                          ? 'bg-[#122144] dark:bg-blue-600 text-white border-[#122144] dark:border-blue-500'
+                          ? 'bg-[#122144] dark:bg-sky-600 text-white border-[#122144] dark:border-sky-500'
                           : 'bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 border-slate-200/70 dark:border-slate-800'
                       }`}
                       title={`${m.full}: ${
@@ -739,7 +1191,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                    <Compass className="w-4 h-4 text-[#122144] dark:text-blue-400" />
+                    <Compass className="w-4 h-4 text-[#122144] dark:text-sky-400" />
                     Zwiedź przy okazji — kraje sąsiednie i bliskie logistycznie
                   </h3>
                   <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
@@ -761,7 +1213,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                         ).map((n) => n.code)
                       )
                     }
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-[#122144] dark:bg-blue-600 hover:bg-slate-800 dark:hover:bg-blue-500 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-[#122144] dark:bg-sky-600 hover:bg-slate-800 dark:hover:bg-sky-500 rounded-lg transition-colors whitespace-nowrap shrink-0"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
                     Utwórz pakiet z sąsiadami (
@@ -829,7 +1281,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                                   nStatus === 'VISITED'
                                     ? 'text-emerald-700 dark:text-emerald-400'
                                     : nStatus === 'PLANNED'
-                                    ? 'text-blue-700 dark:text-blue-400'
+                                    ? 'text-sky-700 dark:text-sky-400'
                                     : nStatus === 'WISHLIST'
                                     ? 'text-amber-700 dark:text-amber-400'
                                     : 'text-slate-500 dark:text-slate-400'
@@ -927,7 +1379,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                         val === '' ? undefined : Number(val)
                       );
                     }}
-                    className="w-36 px-3 py-1.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#122144] dark:focus:ring-blue-500 font-mono tabular-nums"
+                    className="w-36 px-3 py-1.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#122144] dark:focus:ring-sky-500 font-mono tabular-nums"
                   />
                 </div>
               )}
@@ -938,7 +1390,7 @@ export const CountryInspectorModal: React.FC<CountryInspectorModalProps> = ({
                   value={userData.notes ?? ''}
                   onChange={(e) => onUpdateNotes(country.code, e.target.value)}
                   placeholder="Wpisz własne wskazówki, numery lotów, kontakty do lokalnych kierowców, wymagane szczepienia lub wrażenia z podróży..."
-                  className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#122144] dark:focus:ring-blue-500 leading-relaxed"
+                  className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#122144] dark:focus:ring-sky-500 leading-relaxed"
                 />
               </div>
             </div>

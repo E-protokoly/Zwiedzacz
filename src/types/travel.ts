@@ -16,6 +16,44 @@ export type VisitStatus = 'UNVISITED' | 'VISITED' | 'PLANNED' | 'WISHLIST';
 
 export type TravelStyle = 'budget' | 'mid' | 'comfort';
 
+export type ClusterId =
+  // Europa (7)
+  | 'eu-central-baltic'
+  | 'eu-nordic'
+  | 'eu-west-benelux'
+  | 'eu-alpine-italia'
+  | 'eu-iberia'
+  | 'eu-balkans'
+  | 'eu-east'
+  // Azja (8)
+  | 'as-caucasus'
+  | 'as-levant'
+  | 'as-gulf'
+  | 'as-central-stans'
+  | 'as-south'
+  | 'as-indochina'
+  | 'as-maritime-se'
+  | 'as-east'
+  // Afryka (7)
+  | 'af-north'
+  | 'af-west-atlantic'
+  | 'af-gulf-guinea'
+  | 'af-central'
+  | 'af-horn'
+  | 'af-east-lakes'
+  | 'af-south-indian'
+  // Ameryka Północna i Karaiby (4)
+  | 'na-north'
+  | 'na-central-isthmus'
+  | 'na-greater-antilles'
+  | 'na-lesser-antilles'
+  // Ameryka Południowa (2)
+  | 'sa-guianas-north'
+  | 'sa-andes-cone'
+  // Oceania (2)
+  | 'oc-south-pacific'
+  | 'oc-micronesia';
+
 export interface DailyCostTier {
   budget: number;  // USD / day (backpacker, hostele, street food, transport lokalny)
   mid: number;     // USD / day (hotele 3*, restauracje lokalne, pociągi/loty)
@@ -31,7 +69,7 @@ export interface CountryRecord {
   unStatus: UNStatus;
   continent: Continent;
   subregion: string;
-  clusterId: string;
+  clusterId: ClusterId;
   riskLevel: RiskLevel;
   dailyCostUsd: DailyCostTier;
   visaForPl: VisaRequirementPL;
@@ -43,7 +81,7 @@ export interface CountryRecord {
 }
 
 export interface TravelCluster {
-  id: string;
+  id: ClusterId;
   namePl: string;
   continent: Continent;
   subregion: string;
@@ -53,6 +91,7 @@ export interface TravelCluster {
   estimatedFlightFromPlUsd: number;
   recommendedTotalDays: number;
   bestMonths: number[];
+  recommendedOrder?: string[];
 }
 
 export interface UserCountryData {
@@ -72,7 +111,7 @@ export interface TripStop {
 export interface SavedTripPlan {
   id: string;
   name: string;
-  clusterId?: string;
+  clusterId?: ClusterId;
   targetMonth: number; // 1..12
   travelStyle: TravelStyle;
   estimatedFlightsUsd: number;

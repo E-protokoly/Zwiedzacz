@@ -26,7 +26,7 @@ import {
   USD_TO_PLN,
 } from '../data/index.ts';
 import { COUNTRY_COORDINATES } from '../data/countryCoordinates.ts';
-import { CountryFlag } from './CountryFlag.tsx';
+import { CountryFlag, getCountryFlagUrl } from './CountryFlag.tsx';
 
 type MapClickMode = 'select_trip' | 'inspect_news' | 'toggle_visited';
 
@@ -244,7 +244,7 @@ export const WorldMapView: React.FC<WorldMapViewProps> = ({
       let markerHtml = '';
       let iconSize: [number, number] = [24, 24];
 
-      const flagImgHtml = `<img src="https://flagcdn.com/w40/${country.code.toLowerCase()}.png" alt="${country.code}" style="width:14px;height:10px;object-fit:cover;border-radius:1px;display:block;" />`;
+      const flagImgHtml = `<img src="${getCountryFlagUrl(country.code, 40)}" alt="${country.code}" style="width:14px;height:10px;object-fit:cover;border-radius:1px;display:block;" />`;
 
       if (isInTrip) {
         iconSize = [30, 30];

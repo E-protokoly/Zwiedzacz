@@ -3,7 +3,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai';
 import {
   ALL_COUNTRIES,
   COUNTRIES_BY_CODE,
@@ -867,8 +867,41 @@ ZASADY DZIAŁANIA NARZĘDZI (FUNCTION CALLING):
         ? CLUSTERS_BY_ID[seedCountry.clusterId]
         : undefined;
       const clusterCountries = ALL_COUNTRIES.filter(
-        (c) => c.clusterId === (seedCountry?.clusterId || 'guianas-trinidad')
+        (c) => c.clusterId === (seedCountry?.clusterId || 'sa-guianas-north')
       ).slice(0, 5);
+
+      const hasTripPlanningIntent =
+        /(zaplanuj|ułóż|uloz|zapisz|stworz|stwórz|zbuduj|przygotuj|wypraw|tras|wycieczk|pakiet|plan\b)/i.test(
+          qLower
+        );
+
+      if (!hasTripPlanningIntent && seedCountry) {
+        const neighborNames = seedCountry.neighbors
+          .map((code) => COUNTRIES_BY_CODE[code]?.namePl)
+          .filter(Boolean)
+          .join(', ');
+
+        res.json({
+          reply: `Oto najważniejsze informacje podróżnicze dla **${seedCountry.namePl}** (${seedCountry.capitalPl}):\n\n- **Sezon pogodowy:** ${formatMonthsRange(
+            seedCountry.bestMonths
+          )}\n- **Wiza dla Polaków:** ${
+            VISA_LABELS_PL[seedCountry.visaForPl].label
+          } (${seedCountry.visaNotePl})\n- **Budżet dzienny:** Backpacker $${
+            seedCountry.dailyCostUsd.budget
+          } · Komfort $${seedCountry.dailyCostUsd.mid} · Premium $${
+            seedCountry.dailyCostUsd.comfort
+          }\n- **Bezpieczeństwo:** ${
+            RISK_LABELS_PL[seedCountry.riskLevel].label
+          }\n- **Kraje sąsiednie w pakiecie (${
+            cluster?.namePl || seedCountry.subregion
+          }):** ${neighborNames || 'Wyspa / połączenia lotnicze'}\n\nJeśli chcesz, napisz *„Zaplanuj i zapisz pakiet dla ${
+            seedCountry.namePl
+          }”*, a automatycznie ułożę i zapiszę tę trasę w Kreatorze Wypraw!`,
+          toolCalls: [],
+          sources: [],
+        });
+        return;
+      }
 
       const fallbackStops = clusterCountries.map((c) => ({
         countryCode: c.code,

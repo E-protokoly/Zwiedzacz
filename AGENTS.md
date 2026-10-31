@@ -55,16 +55,16 @@ Plik `/AGENTS.md` stanowi bezwzględne źródło prawdy dla rozwoju aplikacji **
 
 ### 3. Planowanie Pakietowe („Zwiedź przy okazji”)
 - **Silnik Sąsiedztwa:** Wybór dowolnego kraju natychmiast wskazuje kraje sąsiednie lądowo lub połączone krótkim lotem regionalnym, które jeszcze nie zostały odwiedzone.
-- **26 Klastrów Regionalnych:** Kraje są pogrupowane w logiczne pakiety geograficzne, które można wczytać jednym kliknięciem do Kreatora Wypraw lub na Mapę.
+- **30 Klastrów Regionalnych:** Kraje są pogrupowane w 30 logicznych pakietów geograficznych (7 w Europie, 8 w Azji, 7 w Afryce, 4 w Ameryce Płn. i Karaibach, 2 w Ameryce Płd., 2 w Oceanii), które można wczytać jednym kliknięciem do Kreatora Wypraw lub na Mapę.
 
 ### 4. Jedno Źródło Prawdy Trasy (`Map ↔ Builder ↔ AI Sync`)
 - Aktywna wycieczka (`tripStops`) jest współdzielona pomiędzy **Mapą Świata**, **Kreatorem Wypraw**, **Optymalną Trasą 195** oraz **Asystentką AI**.
 - Dodanie kraju lub wczytanie etapu w dowolnym module natychmiast rysuje trasę (`polyline`) i podpowiedzi sąsiadów na Mapie Świata oraz przelicza budżet i walidację pogody/wiz w Kreatorze.
 
-### 5. Inspektor Kraju: Zdjęcia + Najnowsze Wiadomości na Żywo
+### 5. Inspektor Kraju: Zdjęcia + Najnowsze Wiadomości na Żywo (`Architektura Zero-429`)
 - Otwarcie dowolnego kraju prezentuje:
-  1. **Galerię 4 najciekawszych miejsc i zabytków** (prawdziwe zdjęcia z Wikimedia/Wikipedia z podglądem Lightbox oraz bezpiecznym fallbackiem Zero-Broken-Image).
-  2. **Najnowsze wiadomości ze świata i komunikaty dla podróżnych** pobierane na żywo przez Gemini z Google Search Grounding (z klikalnymi linkami źródłowymi).
+  1. **Galerię 4 najciekawszych miejsc i zabytków** (prawdziwe zdjęcia z kaskady Wikipedia REST API + MediaWiki Action API z trwałym cache dyskowym `.cache/wiki-media-cache-v3.json`, podglądem Lightbox oraz bezpiecznym fallbackiem Zero-Broken-Image).
+  2. **Najnowsze wiadomości ze świata i komunikaty dla podróżnych** pobierane na żywo w architekturze **Zero-429**: darmowy kanał Google News RSS (`PL` + `EN`, 0 kosztu quota) połączony z syntezą `gemini-2.5-flash` oraz natychmiastowym, deterministycznym fallbackiem (z klikalnymi linkami źródłowymi).
   3. **Status odwiedzenia, rok podróży i prywatne notatki** zapisywane natychmiastowo.
 
 ### 6. Osobista Asystentka Podróży z Zapisem Planów (`Actionable AI Assistant`)
@@ -82,9 +82,32 @@ Plik `/AGENTS.md` stanowi bezwzględne źródło prawdy dla rozwoju aplikacji **
 
 ### 2. Bezpieczeństwo Danych Użytkownika (`Zero Data Loss`)
 - Każda zmiana statusu odwiedzenia, notatki, motywu (`Dark Mode`), aktywnej trasy czy rozmowy z asystentką zapisuje się synchronicznie w `localStorage`.
-- Nadpisanie edytowanej trasy nowym klastrem lub etapem z Masterplanu jest chronione przez strażnika niezapisanych zmian (`UnsavedChangesModal`).
-- Użytkownik ma w każdej chwili dostęp do pełnego eksportu i importu swoich danych w formacie `.json`.
+- Nadpisanie edytowanej trasy nowym klastrem, etapem z Masterplanu, planem z Asystentki AI lub wyczyszczenie trasy jest chronione przez strażnika niezapisanych zmian (`UnsavedChangesModal` / `guardUnsavedDraft`).
+- Użytkownik ma w każdej chwili dostęp do pełnego eksportu i importu swoich danych (`userProgress`, `savedTrips`, `activeDraft`) w formacie `.json`.
 
 ### 3. Izolacja Błędów i Pancerne Formularze (`Zero-Freeze UI`)
 - Każdy główny widok aplikacji jest odizolowany własnym komponentem `<ErrorBoundary isolateSection={true}>`.
 - Wszystkie pola formularzy są w 100% kontrolowane (`value={field ?? ''}`), a wszystkie szuflady i modale renderują się przez `createPortal(..., document.body)`.
+
+---
+
+## IV. STANDARDY INŻYNIERYJNE, INTEGRALNOŚĆ DANYCH I ZERO DATA LOSS
+
+### 1. Silne Typowanie Identyfikatorów (`ClusterId`)
+- Pole `clusterId` w `CountryRecord`, `SavedTripPlan` oraz `id` w `TravelCluster` (`src/types/travel.ts`) musi używać ścisłego typu unii `ClusterId` obejmującego wszystkie 30 identyfikatorów klastrów regionalnych. Zabronione jest używanie luźnego `string`, aby kompilator TypeScript natychmiast wychwytywał literówki lub wycofane identyfikatory.
+
+### 2. Kompatybilność z Natywnym TypeScript w Node.js (`import type`)
+- Ponieważ serwer (`server.ts`) oraz skrypty walidacyjne (`scripts/validate-data.ts`) importują moduły z `src/data/*` i `src/types/*`, wszystkie importy samych typów i interfejsów muszą bezwzględnie używać składni `import type { ... }`.
+
+### 3. Pełna Polityka `Zero Data Loss` przy Starcie i Edycji
+- Cały obiekt aktywnego szkicu (`activeDraft`: `tripName`, `targetMonth`, `travelStyle`, `estimatedFlightsUsd`, `stops`) musi być inicjalizowany synchronicznie z `localStorage` przed pierwszym uruchomieniem efektów zapisu (`useEffect`), aby odświeżenie strony (`F5`) nigdy nie nadpisało danych wartościami domyślnymi.
+- Każda akcja nadpisująca lub czyszcząca aktywną trasę (wczytanie klastra, etapu Masterplanu, zapisanej trasy, propozycji z Asystentki AI oraz przyciski „Wyczyść trasę”) musi przechodzić przez `guardUnsavedDraft` (`UnsavedChangesModal`), jeśli `isDraftDirty && tripStops.length > 0`.
+
+### 4. Automatyczna Walidacja Integralności Danych (`scripts/validate-data.ts`)
+- Przed każdym buildem skrypt `npm run validate:data` weryfikuje:
+  - dokładnie **195 unikalnych państw** (193 członków ONZ + Watykan `VA` i Palestyna `PS`),
+  - dokładnie **30 klastrów regionalnych** w `TRAVEL_CLUSTERS` i przypisanie każdego państwa do istniejącego klastra,
+  - spójność ewentualnych pól `recommendedOrder` z listą państw w klastrze,
+  - poprawność wszystkich kodów ISO-2 w tablicach `neighbors` oraz symetrię sąsiedztwa lądowego,
+  - niepustą tablicę `bestMonths` (zawierającą wyłącznie miesiące `1..12`) oraz poprawne współrzędne geograficzne `[lat, lng]` w `COUNTRY_COORDINATES`.
+

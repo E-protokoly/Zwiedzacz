@@ -1,8 +1,10 @@
-import { CountryRecord, TravelCluster, VisaRequirementPL, RiskLevel, VisitStatus } from '../types/travel.ts';
+import type { CountryRecord, TravelCluster, VisaRequirementPL, RiskLevel, VisitStatus } from '../types/travel.ts';
 import { COUNTRIES_EUROPE_AND_AMERICAS } from './countriesEuropeAndAmericas.ts';
 import { COUNTRIES_ASIA_AND_OCEANIA } from './countriesAsiaAndOceania.ts';
 import { COUNTRIES_AFRICA } from './countriesAfrica.ts';
 import { TRAVEL_CLUSTERS } from './clusters.ts';
+
+export { TRAVEL_CLUSTERS };
 
 export const ALL_COUNTRIES: CountryRecord[] = [
   ...COUNTRIES_EUROPE_AND_AMERICAS,
