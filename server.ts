@@ -2,7 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai';
 import {
   ALL_COUNTRIES,
@@ -16,7 +15,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Server-side in-memory caches so repeated clicks are instant (<5ms) and preserve API quota
 const serverPhotosCache = new Map<
@@ -40,14 +39,21 @@ const serverNewsCache = new Map<
   }
 >();
 
+function isAiEnabled(): boolean {
+  return Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_CLOUD_PROJECT || process.env.K_SERVICE);
+}
+
 function getGenAIClient(): GoogleGenAI {
+  if (process.env.GEMINI_API_KEY) {
+    return new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
+  }
   return new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
+    vertexai: true,
+    project: process.env.GOOGLE_CLOUD_PROJECT || 'radarkapitalu',
+    location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
   });
 }
 
@@ -547,6 +553,10 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
 
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', service: 'atlas-195' });
+  });
+
   // 1. Endpoint: Top iconic places & verified landmark photos (Wikipedia-powered, 0 Gemini Quota Burn!)
   app.post('/api/country-photos', async (req, res) => {
     try {
@@ -634,7 +644,7 @@ async function startServer() {
       let summaryMarkdown = '';
 
       // Step 2: Try to synthesize with Gemini WITHOUT expensive googleSearch tool quota (feeding RSS headlines directly)
-      if (process.env.GEMINI_API_KEY) {
+      if (isAiEnabled()) {
         try {
           const ai = getGenAIClient();
           const headlinesContext =
@@ -948,6 +958,7 @@ ZASADY DZIAŁANIA NARZĘDZI (FUNCTION CALLING):
   });
 
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
